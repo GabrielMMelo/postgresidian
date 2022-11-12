@@ -4,6 +4,7 @@ import { SettingsTab } from ".";
 import { IPostgresPluginSettings } from "../types/plugin-settings";
 import { DataviewApi, getAPI } from "obsidian-dataview";
 import { Client } from "pg";
+import moment from 'moment';
 
 export class PostgreSQLPlugin extends Plugin {
 	public settings: IPostgresPluginSettings;
@@ -24,20 +25,20 @@ export class PostgreSQLPlugin extends Plugin {
 				const filepath: string =
 					this.app.workspace.getActiveFile().path;
 				const dataviewData: Record<string, unknown> = dv.page(filepath);
+				const fileMetadata = dataviewData.file;
+				const fileContent: string = await dv.io.load(filepath);
+				const timestamp = moment(new Date()).format('YYYY-MM-DD hh:mm:ssZ');
 
 				delete dataviewData.file;
 				delete dataviewData.position;
 
 				try {
 					await db.query(
-						`INSERT INTO obsidian.file (path, dataview_data)
-						VALUES ($1::text, $2::json)
-						ON CONFLICT (path)
-						DO
-							UPDATE SET dataview_data = EXCLUDED.dataview_data
+						`INSERT INTO obsidian.file (path, timestamp, file_metadata, dataview_metadata, file_content)
+						VALUES ($1::text, $2::timestamp, $3::json, $4::json, $5::text)
 						;
 						`,
-						[filepath, dataviewData]
+						[filepath, timestamp, fileMetadata, dataviewData, fileContent]
 					);
 				} catch (err) {
 					// eslint-disable-next-line no-new
@@ -49,6 +50,48 @@ export class PostgreSQLPlugin extends Plugin {
 				new Notice("Inserted page");
 			},
 		});
+
+		this.addCommand({
+			id: "postgresql-upload-modified-files",
+			name: "PostgreSQL: upload modified files information",
+			callback: async () => {
+				const db: Client = await this.getDatabaseClient();
+
+				const lastTimestamp = await db.query("SELECT max(timestamp) FROM obsidian.file");
+				const pages = dv.pages()
+					.filter(page => new Date(page.file.mtime) >= lastTimestamp.rows[0].max)
+									
+				pages.map(async page => {
+					const filepath: string = page.file.path;
+					const dataviewData: Record<string, unknown> = page;
+					const fileMetadata = dataviewData.file;
+					const fileContent: string = await dv.io.load(filepath);
+					const timestamp = moment(new Date()).format('YYYY-MM-DD HH:mm:ssZ');
+
+					delete dataviewData.file;
+					delete dataviewData.position;
+
+					try {
+						await db.query(
+							`INSERT INTO obsidian.file (path, timestamp, file_metadata, dataview_metadata, file_content)
+							VALUES ($1::text, $2::timestamp, $3::json, $4::json, $5::text)
+							;
+							`,
+							[filepath, timestamp, fileMetadata, dataviewData, fileContent]
+						);
+					} catch (err) {
+						// eslint-disable-next-line no-new
+						new Notice("PostgreSQL error: " + err.message);
+						throw err;
+					}
+				})
+				
+
+				// eslint-disable-next-line no-new
+				new Notice(pages.length + " pages inserted");
+			},
+		});
+		
 	}
 
 	/**
@@ -85,8 +128,12 @@ export class PostgreSQLPlugin extends Plugin {
 		await this.db.query(
 			`CREATE SCHEMA IF NOT EXISTS obsidian;
 			CREATE TABLE IF NOT EXISTS obsidian.file (
-					path text PRIMARY KEY,
-					dataview_data json
+					path text,
+					timestamp timestamp,
+					file_metadata json,
+					dataview_metadata json,
+					file_content text
+
 			);`
 		);
 

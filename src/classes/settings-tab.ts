@@ -24,7 +24,6 @@ export class SettingsTab extends PluginSettingTab {
 					.setPlaceholder("")
 					.setValue(this.plugin.settings.connectionUrl)
 					.onChange(async (url) => {
-						// TODO: try the connection URL
 						this.plugin.settings.connectionUrl = url;
 						await this.plugin.saveSettings();
 					})
